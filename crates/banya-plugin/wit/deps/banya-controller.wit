@@ -1,0 +1,9 @@
+package banya:controller@0.1.0;
+
+interface controller {
+  execute: func(name: string, data: string) -> result<string, string>;
+}
+
+world app {
+  import controller;
+}

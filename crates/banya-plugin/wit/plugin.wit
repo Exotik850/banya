@@ -1,0 +1,19 @@
+package banya:plugin@0.1.0;
+
+interface action {
+  execute: func(data: string) -> result<string, string>;
+}
+
+world action-plugin {
+  import banya:controller/controller@0.1.0;
+  export action;
+}
+
+interface sensor {
+  matches: func(data: string) -> bool;
+}
+ 
+world sensor-plugin {
+  import banya:controller/controller@0.1.0;
+  export sensor;
+}
