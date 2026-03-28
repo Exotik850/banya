@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 use wasmtime::AsContextMut;
 
 use crate::PluginHost;
@@ -13,7 +13,8 @@ pub struct Action;
 #[derive(Deserialize, Serialize, Debug, PartialEq, Eq, Hash)]
 pub struct NamedValue<T> {
     name: String,
-    data: Value,
+    #[serde(flatten)]
+    data: Map<String, Value>,
     _marker: std::marker::PhantomData<T>,
 }
 
@@ -74,8 +75,9 @@ impl ValidatedInstruction {
                 .ok_or_else(|| format!("No plugin found for sensor: {}", self.sensor.value.name))?
                 .clone()
         };
-        let sensor_result =
-            sensor_plugin.execute(&mut store, self.sensor.value.data.to_string())?;
+        let sensor_data = serde_json::to_string(&self.sensor.value.data)
+            .map_err(|e| format!("Failed to serialize sensor data: {}", e))?;
+        let sensor_result = sensor_plugin.execute(&mut store, sensor_data)?;
 
         if !serde_json::from_str::<bool>(&sensor_result).unwrap_or(true) {
             return Err(format!(
@@ -84,6 +86,8 @@ impl ValidatedInstruction {
             ));
         }
 
+        let action_data = serde_json::to_string(&self.action.value.data)
+            .map_err(|e| format!("Failed to serialize action data: {}", e))?;
         // Execute action plugin with sensor result
         let action_plugin = {
             let host = store.as_context().data();
@@ -92,6 +96,6 @@ impl ValidatedInstruction {
                 .ok_or_else(|| format!("No plugin found for action: {}", self.action.value.name))?
                 .clone()
         };
-        action_plugin.execute(store, sensor_result)
+        action_plugin.execute(store, action_data)
     }
 }
