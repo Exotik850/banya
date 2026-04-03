@@ -12,7 +12,12 @@ wasmtime-wasi = "43.0.0"
 
 
 [workspace]
-members = ["crates/banya-plugin", "crates/banya-plugin/examples/echo"]
+members = [
+    "crates/banya-plugin",
+    "crates/banya-plugin/examples/echo",
+    "crates/banya-plugin/examples/get-time",
+    "crates/banya-plugin/examples/print-time",
+]
 
 [workspace.dependencies]
 wit-bindgen = "0.54"

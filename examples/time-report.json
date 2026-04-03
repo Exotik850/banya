@@ -1,0 +1,34 @@
+{
+  "name": "time-report",
+  "steps": [
+    {
+      "plugin": "get-time",
+      "capability": "sensor",
+      "format": "%Y-%m-%d %H:%M:%S",
+      "store_as": "current_time"
+    },
+    {
+      "plugin": "get-time",
+      "capability": "sensor",
+      "format": "%A, %B %d, %Y",
+      "store_as": "formatted_date"
+    },
+    {
+      "plugin": "print-time",
+      "capability": "action",
+      "time": "${current_time}",
+      "message": "Current timestamp"
+    },
+    {
+      "plugin": "print-time",
+      "capability": "action",
+      "time": "${formatted_date}",
+      "message": "Today's date"
+    },
+    {
+      "plugin": "echo",
+      "capability": "action",
+      "data": "Time report completed successfully!"
+    }
+  ]
+}

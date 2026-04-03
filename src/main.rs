@@ -6,38 +6,54 @@ use wasmtime::{Config, Engine, Store, component::Linker};
 use wasmtime_wasi::WasiCtx;
 
 mod args;
- 
+
 fn main() {
     let args = args::Args::parse();
 
+    // Set up WASI context and plugin host
     let wasi = WasiCtx::builder().inherit_stdio().inherit_args().build();
     let state = PluginHost::new(wasi);
+
+    // Configure engine with component model support
     let engine = Engine::new(Config::new().wasm_component_model(true)).unwrap();
     let mut store = Store::new(&engine, state);
 
-    let (sensor_linker, action_linker) = get_linkers(&engine);
+    // Create a single unified linker for all plugins
+    let linker = get_linker(&engine);
 
     {
+        // Load all plugins from specified paths
         let mut load_plugin = |path: &Path| {
-            let plugin =
-                Plugin::from_file(path, &engine, &mut store, &sensor_linker, &action_linker)?;
+            let plugin = Plugin::from_file(path, &engine, &mut store, &linker)?;
+            println!(
+                "  Loaded plugin '{}' v{} with capabilities: {:?}",
+                plugin.name(),
+                plugin.version(),
+                plugin.capabilities()
+            );
             store.data_mut().push(plugin);
             Ok::<_, wasmtime::Error>(())
         };
 
         let mut paths = Vec::new();
 
+        // Collect all .wasm files from directories and individual file paths
         for path in args.wasm_dir.iter().chain(args.wasm_file.iter()) {
             get_all_wasm_paths(path, &mut paths);
         }
 
+        println!("Loading {} plugin(s)...", paths.len());
         paths.into_iter().for_each(|p| match load_plugin(&p) {
-            Ok(()) => println!("Loaded plugin from {}", p.display()),
+            Ok(()) => {}
             Err(e) => {
                 eprintln!("Failed to load plugin from {}: {}", p.display(), e);
             }
         });
+
+        println!("Total plugins loaded: {}", store.data().len());
     }
+
+    // Parse and execute instructions from JSON file
     let json_file = std::fs::File::open(&args.json_file).expect("Failed to open JSON file");
     let instruction: Instruction =
         serde_json::from_reader(json_file).expect("Failed to parse JSON file");
@@ -45,44 +61,45 @@ fn main() {
     let validated = instruction
         .validate(store.data())
         .expect("Failed to validate instruction");
-    validated
+
+    let result = validated
         .execute(&mut store)
         .expect("Failed to run instructions");
+
+    println!("Result: {result}");
 }
 
+/// Recursively collect all .wasm files from a path
 fn get_all_wasm_paths(path: impl AsRef<Path>, buffer: &mut Vec<PathBuf>) {
-    if path.as_ref().is_file() && path.as_ref().extension().and_then(|e| e.to_str()) == Some("wasm")
-    {
-        buffer.push(path.as_ref().to_path_buf());
-    } else if path.as_ref().is_dir() {
+    let path = path.as_ref();
+    if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("wasm") {
+        buffer.push(path.to_path_buf());
+    } else if path.is_dir() {
         for entry in std::fs::read_dir(path).unwrap() {
             let entry = entry.unwrap();
             let path = entry.path();
-            if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("wasm") {
-                buffer.push(path);
-            } else {
-                get_all_wasm_paths(path, buffer);
-            }
+            get_all_wasm_paths(path, buffer);
         }
     }
 }
 
-fn get_linkers(engine: &Engine) -> (Linker<PluginHost>, Linker<PluginHost>) {
-    let mut sensor_linker = Linker::new(engine);
-    let mut action_linker = Linker::new(engine);
+/// Create a single unified linker that supports WASI and the controller interface
+fn get_linker(engine: &Engine) -> Linker<PluginHost> {
+    let mut linker = Linker::new(engine);
 
-    wasmtime_wasi::p2::add_to_linker_sync(&mut sensor_linker).unwrap();
-    wasmtime_wasi::p2::add_to_linker_sync(&mut action_linker).unwrap();
+    // Add WASI support for plugins
+    wasmtime_wasi::p2::add_to_linker_sync(&mut linker).unwrap();
 
-    banya::bindings::action::banya::controller::controller::add_to_linker::<_, PluginHost>(
-        &mut action_linker,
+    // Add the controller interface so plugins can call back into the host
+    banya::bindings::host::banya::controller::controller::add_to_linker::<_, PluginHost>(
+        &mut linker,
         |s: &mut PluginHost| s,
     )
     .unwrap();
-    banya::bindings::sensor::banya::controller::controller::add_to_linker::<_, PluginHost>(
-        &mut sensor_linker,
+    banya::bindings::host::banya::controller::json::add_to_linker::<_, PluginHost>(
+        &mut linker,
         |s: &mut PluginHost| s,
     )
     .unwrap();
-    (sensor_linker, action_linker)
+    linker
 }

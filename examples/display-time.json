@@ -1,0 +1,17 @@
+{
+  "name": "display-current-time",
+  "steps": [
+    {
+      "plugin": "get-time",
+      "capability": "sensor",
+      "format": "%Y-%m-%d %H:%M:%S",
+      "store_as": "current_time"
+    },
+    {
+      "plugin": "print-time",
+      "capability": "action",
+      "time": "${current_time}",
+      "message": "The current time is"
+    }
+  ]
+}

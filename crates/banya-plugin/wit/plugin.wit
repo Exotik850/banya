@@ -1,19 +1,70 @@
 package banya:plugin@0.1.0;
 
-interface action {
-  execute: func(data: string) -> result<string, string>;
+interface plugin-impl {
+    use banya:controller/json@0.1.0.{value, id, object};
+
+    /// Schema definition for a plugin capability
+    /// Describes what inputs/outputs a capability expects
+    record capability-schema {
+        /// Name of the capability (e.g., "sensor", "action", "transform")
+        name: string,
+        /// Human-readable description of what this capability does
+        description: option<string>,
+        /// List of expected input parameter names and their types
+        inputs: list<tuple<string, string>>,
+        /// Expected output type description
+        output: option<string>,
+    }
+
+    /// Plugin metadata returned during initialization
+    record plugin-info {
+        /// Unique plugin identifier
+        name: string,
+        /// Semantic version string (e.g., "1.0.0")
+        version: string,
+        /// Human-readable description of the plugin
+        description: option<string>,
+        /// Author or maintainer information
+        author: option<string>,
+        /// Capabilities this plugin provides (e.g., "sensor", "action", "transform", "filter")
+        capabilities: list<capability-schema>,
+    }
+
+    /// Initialize the plugin and return its metadata
+    /// Called once when the plugin is loaded
+    init: func() -> plugin-info;
+
+    /// Configure the plugin with host-provided settings
+    /// Called after init, before any invoke calls
+    /// Returns Ok(()) if configuration was accepted, Err(string) if rejected
+    configure: func(config: object) -> result<_, string>;
+
+    /// Invoke a capability with arguments
+    /// - capability: The capability to invoke (e.g., "sensor", "action")
+    /// - method: The specific method within that capability (e.g., "matches", "execute")
+    /// - args: List of arguments to pass to the method
+    /// Returns the result value or an error string
+    invoke: func(
+        capability: string,
+        args: list<id>
+    ) -> result<option<id>, string>;
+
+    /// Get the current state of the plugin as a serialized value
+    /// Useful for debugging, serialization, or state transfer
+    get-state: func() -> value;
+
+    /// Clean up plugin resources before unloading
+    /// Called when the plugin is being removed from the host
+    shutdown: func();
 }
 
-world action-plugin {
-  import banya:controller/controller@0.1.0;
-  export action;
-}
-
-interface sensor {
-  matches: func(data: string) -> bool;
-}
- 
-world sensor-plugin {
-  import banya:controller/controller@0.1.0;
-  export sensor;
+/// The plugin host world - this is what plugins export and hosts import
+/// Any application can use this world to load and manage WASM plugins
+world plugin {
+    /// Import controller interface for plugins to call back into the host
+    import banya:controller/controller@0.1.0;
+    import banya:controller/json@0.1.0;
+    
+    /// Export the unified plugin interface
+    export plugin-impl;
 }
