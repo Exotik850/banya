@@ -3,7 +3,6 @@ use serde_json::{Map, Value as JsonValue};
 use wasmtime::AsContextMut;
 
 use crate::PluginHost;
-use crate::bindings::host;
 
 // ─── Capability Call ─────────────────────────────────────────────────────────
 
@@ -28,6 +27,7 @@ pub struct CapabilityCall {
     /// The capability to invoke on the plugin (e.g., "sensor", "action", "transform")
     pub capability: String,
     /// Arbitrary arguments passed to the capability, flattened into the JSON object
+    /// String values can use `${name}` to interpolate stored step results
     #[serde(flatten)]
     pub args: Map<String, JsonValue>,
 }
@@ -167,14 +167,13 @@ impl Instruction {
 
         for (i, step) in self.steps.iter().enumerate() {
             // Validate condition plugin exists
-            if let Some(condition) = &step.condition {
-                if !host.plugins.contains_key(&condition.plugin) {
+            if let Some(condition) = &step.condition
+                && !host.plugins.contains_key(&condition.plugin) {
                     return Err(format!(
                         "Step {}: No plugin found for condition: {}",
                         i, condition.plugin
                     ));
                 }
-            }
 
             // Validate call plugin exists
             if !host.plugins.contains_key(&step.call.plugin) {
@@ -242,9 +241,9 @@ impl ValidatedInstruction {
         &self,
         mut store: S,
     ) -> Result<String, String> {
-        let mut last_result = host::Value::Null;
+        let mut last_result = json_null_bytes();
 
-        for (_i, step) in self.steps.iter().enumerate() {
+        for step in &self.steps {
             // Evaluate condition if present
             if let Some(condition) = &step.condition {
                 let condition_met = condition.evaluate(&mut store)?;
@@ -256,28 +255,19 @@ impl ValidatedInstruction {
 
             // Execute the capability call
             let result = step.call.execute(&mut store)?;
-            last_result = result.clone();
+            last_result.clone_from(&result);
 
             // Store result if requested
             if let Some(name) = &step.store_as {
-                let id = store.as_context_mut().data_mut().next_id();
                 store
                     .as_context_mut()
                     .data_mut()
-                    .json_store
-                    .insert(id, result);
-                store
-                    .as_context_mut()
-                    .data_mut()
-                    .json_map
-                    .insert(name.clone(), id);
+                    .data_store
+                    .insert(name.clone(), result);
             }
         }
 
-        // Convert final result to JSON string
-        let host = store.as_context().data();
-        let json_result = last_result.to_json(host);
-        serde_json::to_string(&json_result).map_err(|e| format!("Failed to serialize result: {e}"))
+        String::from_utf8(last_result).map_err(|e| format!("Result is not valid UTF-8 JSON: {e}"))
     }
 }
 
@@ -298,27 +288,22 @@ impl Condition {
                 .clone()
         };
 
-        // Serialize condition args into the JSON store and get resource ID
-        let args_json = serde_json::Value::Object(self.args.clone());
-        let args_id = Self::store_value(&mut store, args_json)?;
-
-        // Invoke the capability
-        let result = plugin.invoke(&mut store, &self.capability, &[args_id])?;
-
-        // Parse the result as a boolean
-        let result = result.ok_or_else(|| "Condition returned no result".to_string())?;
-        let value = {
+        let args_json = {
             let host = store.as_context().data();
-            host.json_store
-                .get(&result.rep())
-                .cloned()
-                .unwrap_or(host::Value::Null)
+            interpolate_json(JsonValue::Object(self.args.clone()), host)?
+        };
+        let args_bytes = json_to_bytes(&args_json)?;
+
+        let result = plugin.invoke(&mut store, &self.capability, &args_bytes)?;
+        let result_value = match result {
+            Some(bytes) => json_from_bytes(&bytes)?,
+            None => JsonValue::Null,
         };
 
-        let bool_result = match value {
-            host::Value::BoolValue(b) => b,
-            host::Value::Null => false,
-            _ => true, // Non-boolean, non-null results are considered truthy
+        let bool_result = match result_value {
+            JsonValue::Bool(b) => b,
+            JsonValue::Null => false,
+            _ => true,
         };
 
         Ok(if self.negate {
@@ -326,21 +311,6 @@ impl Condition {
         } else {
             bool_result
         })
-    }
-
-    /// Helper to store a JSON value in the host and return its resource ID
-    fn store_value<S: AsContextMut<Data = PluginHost>>(
-        store: &mut S,
-        json: serde_json::Value,
-    ) -> Result<wasmtime::component::Resource<host::banya::controller::json::Id>, String> {
-        let value = host::Value::from_json(json, store.as_context_mut().data_mut());
-        let id = store.as_context_mut().data_mut().next_id();
-        store
-            .as_context_mut()
-            .data_mut()
-            .json_store
-            .insert(id, value);
-        Ok(wasmtime::component::Resource::new_own(id))
     }
 }
 
@@ -351,7 +321,7 @@ impl CapabilityCall {
     pub fn execute<S: AsContextMut<Data = PluginHost>>(
         &self,
         mut store: S,
-    ) -> Result<host::Value, String> {
+    ) -> Result<Vec<u8>, String> {
         let plugin = {
             let host = store.as_context().data();
             host.plugins
@@ -360,38 +330,124 @@ impl CapabilityCall {
                 .clone()
         };
 
-        // Serialize args into the JSON store and get resource ID
-        let args_json = serde_json::Value::Object(self.args.clone());
-        let args_id = Self::store_value(&mut store, args_json)?;
+        let args_json = {
+            let host = store.as_context().data();
+            interpolate_json(JsonValue::Object(self.args.clone()), host)?
+        };
+        let args_bytes = json_to_bytes(&args_json)?;
 
-        // Invoke the capability
-        let result = plugin.invoke(&mut store, &self.capability, &[args_id])?;
+        let result = plugin.invoke(&mut store, &self.capability, &args_bytes)?;
 
-        // Resolve the result value
-        Ok(match result {
-            Some(id) => {
-                let host = store.as_context().data();
-                host.json_store
-                    .get(&id.rep())
-                    .cloned()
-                    .unwrap_or(host::Value::Null)
+        Ok(result.unwrap_or_else(json_null_bytes))
+    }
+}
+
+fn json_to_bytes(value: &JsonValue) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(value).map_err(|e| format!("Failed to serialize JSON: {e}"))
+}
+
+fn json_from_bytes(bytes: &[u8]) -> Result<JsonValue, String> {
+    if bytes.is_empty() {
+        return Ok(JsonValue::Null);
+    }
+    serde_json::from_slice(bytes).map_err(|e| format!("Failed to parse JSON bytes: {e}"))
+}
+
+fn json_null_bytes() -> Vec<u8> {
+    b"null".to_vec()
+}
+
+fn interpolate_json(value: JsonValue, host: &PluginHost) -> Result<JsonValue, String> {
+    match value {
+        JsonValue::String(value) => interpolate_string(value, host),
+        JsonValue::Array(values) => {
+            let mut out = Vec::with_capacity(values.len());
+            for value in values {
+                out.push(interpolate_json(value, host)?);
             }
-            None => host::Value::Null,
-        })
+            Ok(JsonValue::Array(out))
+        }
+        JsonValue::Object(map) => {
+            let mut out = Map::with_capacity(map.len());
+            for (key, value) in map {
+                out.insert(key, interpolate_json(value, host)?);
+            }
+            Ok(JsonValue::Object(out))
+        }
+        other => Ok(other),
+    }
+}
+
+// interpolates string in place
+fn interpolate_string(mut value: String, host: &PluginHost) -> Result<JsonValue, String> {
+    let mut cursor = 0;
+
+    while let Some(start_offset) = value[cursor..].find("${") {
+        let start = cursor + start_offset;
+        // out.push_str(&value[cursor..start]);
+
+        let name_start = start + 2;
+        let end_offset = value[name_start..]
+            .find('}')
+            .ok_or_else(|| format!("Unclosed interpolation in '{value}'"))?;
+        let name_end = name_start + end_offset;
+        let name = &value[name_start..name_end];
+
+        validate_variable_name(name)?;
+        let resolved = lookup_variable(name, host)?;
+
+        if start == 0 && name_end + 1 == value.len() {
+            return Ok(resolved);
+        }
+
+        let resolved_str = json_value_to_string(&resolved)?;
+        value.replace_range(start..=name_end, &resolved_str);
+        cursor = name_end + 1;
     }
 
-    /// Helper to store a JSON value in the host and return its resource ID
-    fn store_value<S: AsContextMut<Data = PluginHost>>(
-        store: &mut S,
-        json: serde_json::Value,
-    ) -> Result<wasmtime::component::Resource<host::banya::controller::json::Id>, String> {
-        let value = host::Value::from_json(json, store.as_context_mut().data_mut());
-        let id = store.as_context_mut().data_mut().next_id();
-        store
-            .as_context_mut()
-            .data_mut()
-            .json_store
-            .insert(id, value);
-        Ok(wasmtime::component::Resource::new_own(id))
+    Ok(JsonValue::String(value))
+}
+
+fn validate_variable_name(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("Interpolation variable name cannot be empty".to_string());
+    }
+
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err(format!(
+            "Interpolation variable '{name}' contains invalid characters (allowed: ASCII letters, digits, '_' or '-')"
+        ));
+    }
+
+    Ok(())
+}
+
+fn lookup_variable(name: &str, host: &PluginHost) -> Result<JsonValue, String> {
+    if let Some(bytes) = host.data_store.get(name) { json_from_bytes(bytes) } else {
+        let mut keys: Vec<&String> = host.data_store.keys().collect();
+        keys.sort();
+        let available = if keys.is_empty() {
+            "none".to_string()
+        } else {
+            keys.iter()
+                .map(|key| key.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        Err(format!(
+            "Interpolation variable '{name}' not found. Available variables: {available}"
+        ))
+    }
+}
+
+fn json_value_to_string(value: &JsonValue) -> Result<String, String> {
+    match value {
+        JsonValue::String(value) => Ok(value.clone()),
+        JsonValue::Null => Ok("null".to_string()),
+        other => serde_json::to_string(other)
+            .map_err(|e| format!("Failed to serialize interpolation value: {e}")),
     }
 }

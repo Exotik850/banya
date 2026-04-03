@@ -1,16 +1,12 @@
-use std::{
-    collections::HashMap,
-    path::Path,
-    sync::{Arc, atomic::AtomicU32},
-};
+use std::{collections::HashMap, path::Path, sync::Arc};
 
 use wasmtime::{
     AsContextMut, Engine,
-    component::{Access, HasData, Linker, Resource},
+    component::{Access, HasData, Linker},
 };
 use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxView, WasiView};
 
-use crate::bindings::{Plugin, host::Value, host::banya::controller::json::Id};
+use crate::bindings::Plugin;
 
 pub mod bindings;
 pub mod instruction;
@@ -20,22 +16,18 @@ pub struct PluginHost {
     table: ResourceTable,
     ctx: WasiCtx,
     pub plugins: HashMap<String, Arc<Plugin>>,
-    current_id: AtomicU32,
-    pub json_store: HashMap<u32, Value>,
-    json_map: HashMap<String, u32>,
+    data_store: HashMap<String, Vec<u8>>,
 }
 
 impl PluginHost {
-    /// Create a new PluginHost with the given WASI context
+    /// Create a new `PluginHost` with the given WASI context
     #[must_use]
     pub fn new(ctx: WasiCtx) -> Self {
         Self {
             table: ResourceTable::new(),
             ctx,
             plugins: HashMap::new(),
-            json_store: HashMap::new(),
-            json_map: HashMap::new(),
-            current_id: AtomicU32::new(0),
+            data_store: HashMap::new(),
         }
     }
 
@@ -46,6 +38,7 @@ impl PluginHost {
     }
 
     /// Get a plugin by name
+    #[must_use] 
     pub fn get(&self, name: &str) -> Option<&Arc<Plugin>> {
         self.plugins.get(name)
     }
@@ -56,11 +49,13 @@ impl PluginHost {
     }
 
     /// Get the number of loaded plugins
+    #[must_use] 
     pub fn len(&self) -> usize {
         self.plugins.len()
     }
 
     /// Check if any plugins are loaded
+    #[must_use] 
     pub fn is_empty(&self) -> bool {
         self.plugins.is_empty()
     }
@@ -82,6 +77,7 @@ impl PluginHost {
     }
 
     /// Find plugins that have a specific capability
+    #[must_use] 
     pub fn find_by_capability(&self, capability: &str) -> Vec<&Arc<Plugin>> {
         self.plugins
             .values()
@@ -90,6 +86,7 @@ impl PluginHost {
     }
 
     /// Find a plugin by name that has a specific capability
+    #[must_use] 
     pub fn find_plugin_with_capability(
         &self,
         name: &str,
@@ -107,11 +104,6 @@ impl PluginHost {
         }
         self.plugins.clear();
     }
-
-    fn next_id(&self) -> u32 {
-        self.current_id
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    }
 }
 
 impl WasiView for PluginHost {
@@ -124,7 +116,19 @@ impl WasiView for PluginHost {
 }
 
 /// Implement the controller host trait - allows plugins to call back into the host
-impl bindings::host::banya::controller::controller::Host for PluginHost {}
+impl bindings::host::banya::controller::controller::Host for PluginHost {
+    fn get(&mut self, name: String) -> Option<Vec<u8>> {
+        self.data_store.get(&name).cloned()
+    }
+
+    fn put(&mut self, name: String, data: Vec<u8>) -> Option<Vec<u8>> {
+        self.data_store.insert(name, data)
+    }
+
+    fn remove(&mut self, name: String) -> Option<Vec<u8>> {
+        self.data_store.remove(&name)
+    }
+}
 
 impl HasData for PluginHost {
     type Data<'a> = &'a mut PluginHost;
@@ -136,8 +140,8 @@ impl bindings::host::banya::controller::controller::HostWithStore for PluginHost
         mut host: Access<T, Self>,
         name: String,
         capability: String,
-        data: Resource<Id>,
-    ) -> Result<Option<Resource<Id>>, String> {
+        data: Vec<u8>,
+    ) -> Result<Option<Vec<u8>>, String> {
         let plugin = {
             let host_data = host.get();
             match host_data.plugins.get(&name) {
@@ -146,45 +150,6 @@ impl bindings::host::banya::controller::controller::HostWithStore for PluginHost
             }
         };
 
-        plugin.invoke(host.as_context_mut(), &capability, &[data])
-    }
-}
-
-impl bindings::host::banya::controller::json::HostId for PluginHost {
-    fn get(&mut self, self_: Resource<Id>) -> Value {
-        let id = self_.rep();
-        self.json_store.get(&id).cloned().unwrap_or(Value::Null)
-    }
-
-    fn drop(&mut self, rep: Resource<Id>) -> wasmtime::Result<()> {
-        self.json_store.remove(&rep.rep());
-        Ok(())
-    }
-}
-impl bindings::host::banya::controller::json::Host for PluginHost {
-    fn put(&mut self, val: Value) -> Resource<Id> {
-        let id = self.next_id();
-        self.json_store.insert(id, val);
-        Resource::new_borrow(id)
-    }
-
-    fn put_named(&mut self, name: String, val: Value) -> (Resource<Id>, Option<Value>) {
-        let id = self.next_id();
-        self.json_store.insert(id, val);
-        let old_val = self
-            .json_map
-            .insert(name.to_string(), id)
-            .and_then(|old_id| self.json_store.remove(&old_id));
-        (Resource::new_borrow(id), old_val)
-    }
-
-    fn get(&mut self, name: String) -> Option<Resource<Id>> {
-        self.json_map.get(&name).map(|id| Resource::new_borrow(*id))
-    }
-
-    fn remove(&mut self, name: String) -> Option<Value> {
-        self.json_map
-            .remove(&name)
-            .and_then(|id| self.json_store.remove(&id))
+        plugin.invoke(host.as_context_mut(), &capability, &data)
     }
 }

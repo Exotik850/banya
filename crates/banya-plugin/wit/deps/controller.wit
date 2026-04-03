@@ -1,43 +1,13 @@
 package banya:controller@0.1.0;
-
-interface json {
-  resource id {
-    get: func() -> value;
-  }
-  
-  type object = list<tuple<string, id>>;
-
-  variant value { 
-    /// Represents a null/empty value
-    null,
-    /// Boolean value
-    bool-value(bool),
-    /// Signed 64-bit integer
-    int(s64),
-    /// 64-bit floating point number
-    float(f64),
-    /// UTF-8 string
-    string-value(string),
-    /// Raw binary data
-    bytes(list<u8>),
-    /// Ordered list of values
-    array(list<id>),
-    /// Key-value object (ordered list of string-value pairs)
-    object(object),
-  }
-
-  put: func(val: value) -> id;
-  put-named: func(name: string, val: value) -> tuple<id, option<value>>; 
-  get: func(name: string) -> option<id>;
-  remove: func(name: string) -> option<value>;
-}
  
 interface controller {
-  use json.{id};
-  execute: func(name: string, capability: string, data: id) -> result<option<id>, string>;
+  type bytes = list<u8>;
+  execute: func(name: string, capability: string, data: bytes) -> result<option<bytes>, string>;
+  get: func(name: string) -> option<bytes>;
+  put: func(name: string, data: bytes) -> option<bytes>;
+  remove: func(name: string) -> option<bytes>;
 }
 
 world app {
-  import json;
   import controller;
 }

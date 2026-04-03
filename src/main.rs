@@ -96,10 +96,5 @@ fn get_linker(engine: &Engine) -> Linker<PluginHost> {
         |s: &mut PluginHost| s,
     )
     .unwrap();
-    banya::bindings::host::banya::controller::json::add_to_linker::<_, PluginHost>(
-        &mut linker,
-        |s: &mut PluginHost| s,
-    )
-    .unwrap();
     linker
 }

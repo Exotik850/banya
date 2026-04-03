@@ -1,9 +1,7 @@
-use banya_plugin::bindings::{
-    exports::banya::plugin::plugin_impl::{
-        CapabilitySchema, Guest, PluginInfo,
-    },
-    banya::controller::json::{Id, Value as JsonValue},
+use banya_plugin::bindings::exports::banya::plugin::plugin_impl::{
+    CapabilitySchema, Guest, PluginInfo,
 };
+use serde_json::Value as JsonValue;
 
 /// Echo plugin - demonstrates the unified plugin interface
 /// This plugin provides both "sensor" and "action" capabilities
@@ -16,7 +14,9 @@ impl Guest for EchoPlugin {
         PluginInfo {
             name: "echo".into(),
             version: "0.1.0".into(),
-            description: Some("A simple echo plugin that demonstrates the unified plugin API".into()),
+            description: Some(
+                "A simple echo plugin that demonstrates the unified plugin API".into(),
+            ),
             author: Some("Banya Team".into()),
             capabilities: vec![
                 CapabilitySchema {
@@ -36,54 +36,55 @@ impl Guest for EchoPlugin {
     }
 
     /// Configure the plugin (echo plugin doesn't need configuration)
-    fn configure(config: Vec<(String, Id)>) -> Result<(), String> {
-        // Log configuration entries (in a real plugin, you'd store these)
-        for (key, id) in &config {
-            let value = id.get();
-            println!("  Config: {} = {:?}", key, value);
+    fn configure(config: Vec<u8>) -> Result<(), String> {
+        let config_value = json_from_bytes(&config)?;
+        let config_object = match config_value {
+            JsonValue::Null => return Ok(()),
+            JsonValue::Object(map) => map,
+            other => return Err(format!("Config must be an object, got {other:?}")),
+        };
+
+        for (key, value) in config_object {
+            println!("  Config: {} = {}", key, value);
         }
         Ok(())
     }
 
     /// Invoke a capability dynamically
-    fn invoke(
-        capability: String,
-        args: Vec<Id>,
-    ) -> Result<Option<Id>, String> {
+    fn invoke(capability: String, args: Vec<u8>) -> Result<Option<Vec<u8>>, String> {
+        let args_value = json_from_bytes(&args)?;
         match capability.as_str() {
             // Sensor capability: check if data matches "value"
             "sensor" => {
-                let data = extract_string_arg(&args, 0, "data")?;
+                let data = extract_string_arg(&args_value, "data")?;
                 println!("  [Echo Sensor] Received data: {}", data);
                 let matches = data == "value";
-                let id = JsonValue::BoolValue(matches).into();
-                Ok(Some(id))
+                let result = JsonValue::Bool(matches);
+                Ok(Some(json_to_bytes(&result)?))
             }
 
             // Action capability: echo back the input
             "action" => {
-                let data = extract_string_arg(&args, 0, "data")?;
+                let data = extract_string_arg(&args_value, "data")?;
                 println!("  [Echo Action] Executing with data: {}", data);
                 let result = format!("Echo: {data}");
-                let id = JsonValue::StringValue(result).into();
-                Ok(Some(id))
+                let result = JsonValue::String(result);
+                Ok(Some(json_to_bytes(&result)?))
             }
 
             // Unknown capability
-            _ => Err(format!(
-                "Unknown capability: {}",
-                capability
-            )),
+            _ => Err(format!("Unknown capability: {}", capability)),
         }
     }
 
     /// Return the plugin's current state (echo plugin has no state)
-    fn get_state() -> JsonValue {
-        JsonValue::Object(vec![
-            ("name".into(), JsonValue::StringValue("echo".into()).into()),
-            ("version".into(), JsonValue::StringValue("0.1.0".into()).into()),
-            ("status".into(), JsonValue::StringValue("running".into()).into()),
-        ])
+    fn get_state() -> Vec<u8> {
+        let state = serde_json::json!({
+            "name": "echo",
+            "version": "0.1.0",
+            "status": "running"
+        });
+        json_to_bytes(&state).unwrap_or_else(|_| json_null_bytes())
     }
 
     /// Clean up resources before unloading
@@ -92,18 +93,34 @@ impl Guest for EchoPlugin {
     }
 }
 
-/// Helper to extract a string argument from the args list
-fn extract_string_arg(args: &[Id], index: usize, name: &str) -> Result<String, String> {
-    args.get(index)
-        .ok_or_else(|| format!("Missing required argument '{name}' at index {index}"))
-        .and_then(|id| {
-            let value = id.get();
-            match value {
-                JsonValue::StringValue(s) => Ok(s),
-                other => Err(format!(
-                    "Argument '{name}' expected string, got {:?}",
-                    other
-                )),
-            }
-        })
+fn extract_string_arg(value: &JsonValue, name: &str) -> Result<String, String> {
+    match value {
+        JsonValue::Object(map) => match map.get(name) {
+            Some(JsonValue::String(s)) => Ok(s.clone()),
+            Some(other) => Err(format!("Argument '{name}' expected string, got {other:?}")),
+            None => Err(format!("Missing required argument '{name}'")),
+        },
+        JsonValue::Array(values) => match values.first() {
+            Some(JsonValue::String(s)) => Ok(s.clone()),
+            Some(other) => Err(format!("Argument '{name}' expected string, got {other:?}")),
+            None => Err(format!("Missing required argument '{name}'")),
+        },
+        JsonValue::String(s) => Ok(s.clone()),
+        other => Err(format!("Argument '{name}' expected string, got {other:?}")),
+    }
+}
+
+fn json_from_bytes(bytes: &[u8]) -> Result<JsonValue, String> {
+    if bytes.is_empty() {
+        return Ok(JsonValue::Null);
+    }
+    serde_json::from_slice(bytes).map_err(|e| format!("Failed to parse JSON bytes: {e}"))
+}
+
+fn json_to_bytes(value: &JsonValue) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(value).map_err(|e| format!("Failed to serialize JSON: {e}"))
+}
+
+fn json_null_bytes() -> Vec<u8> {
+    b"null".to_vec()
 }

@@ -1,8 +1,8 @@
-use banya_plugin::bindings::{
-    banya::controller::json::{Id, Value as JsonValue},
-    exports::banya::plugin::plugin_impl::{CapabilitySchema, Guest, PluginInfo, Value},
+use banya_plugin::bindings::exports::banya::plugin::plugin_impl::{
+    CapabilitySchema, Guest, PluginInfo,
 };
 use chrono::Local;
+use serde_json::Value as JsonValue;
 
 /// GetTime plugin - returns the current time in various formats
 pub struct GetTimePlugin;
@@ -26,20 +26,25 @@ impl Guest for GetTimePlugin {
     }
 
     /// Configure the plugin (no configuration needed)
-    fn configure(config: Vec<(String, Id)>) -> Result<(), String> {
-        for (key, id) in &config {
-            let value = id.get();
-            println!("  [GetTime] Config: {} = {:?}", key, value);
+    fn configure(config: Vec<u8>) -> Result<(), String> {
+        let config_value = json_from_bytes(&config)?;
+        let config_object = match config_value {
+            JsonValue::Null => return Ok(()),
+            JsonValue::Object(map) => map,
+            other => return Err(format!("Config must be an object, got {other:?}")),
+        };
+
+        for (key, value) in config_object {
+            println!("  [GetTime] Config: {} = {}", key, value);
         }
         Ok(())
     }
 
     /// Invoke a capability dynamically
-    fn invoke(capability: String, args: Vec<Id>) -> Result<Option<Id>, String> {
+    fn invoke(capability: String, args: Vec<u8>) -> Result<Option<Vec<u8>>, String> {
         match capability.as_str() {
             "sensor" => {
-                // Get the JSON object from the first (and only) argument
-                let json_obj = args.first().ok_or("Missing arguments object")?.get();
+                let json_obj = json_from_bytes(&args)?;
 
                 // Extract format from the JSON object (default to ISO 8601)
                 let format = extract_string_from_object(&json_obj, "format")
@@ -50,8 +55,8 @@ impl Guest for GetTimePlugin {
 
                 println!("  [GetTime] Current time: {}", time_str);
 
-                let id = JsonValue::StringValue(time_str).into();
-                Ok(Some(id))
+                let result = JsonValue::String(time_str);
+                Ok(Some(json_to_bytes(&result)?))
             }
 
             _ => Err(format!("Unknown capability: {}", capability)),
@@ -59,26 +64,15 @@ impl Guest for GetTimePlugin {
     }
 
     /// Return the plugin's current state
-    fn get_state() -> Value {
+    fn get_state() -> Vec<u8> {
         let now = Local::now();
-        JsonValue::Object(vec![
-            (
-                "name".into(),
-                JsonValue::StringValue("get-time".into()).into(),
-            ),
-            (
-                "version".into(),
-                JsonValue::StringValue("0.1.0".into()).into(),
-            ),
-            (
-                "current_time".into(),
-                JsonValue::StringValue(now.to_rfc3339()).into(),
-            ),
-            (
-                "status".into(),
-                JsonValue::StringValue("running".into()).into(),
-            ),
-        ])
+        let state = serde_json::json!({
+            "name": "get-time",
+            "version": "0.1.0",
+            "current_time": now.to_rfc3339(),
+            "status": "running"
+        });
+        json_to_bytes(&state).unwrap_or_else(|_| json_null_bytes())
     }
 
     /// Clean up resources before unloading
@@ -87,36 +81,29 @@ impl Guest for GetTimePlugin {
     }
 }
 
-/// Helper to extract a string argument from the args list
-fn extract_string_arg(args: &[Id], index: usize, name: &str) -> Result<String, String> {
-    args.get(index)
-        .ok_or_else(|| format!("Missing required argument '{name}' at index {index}"))
-        .and_then(|id| {
-            let value = id.get();
-            match value {
-                JsonValue::StringValue(s) => Ok(s),
-                _ => Err(format!(
-                    "Argument '{name}' at index {index} must be a string, got {:?}",
-                    value
-                )),
-            }
-        })
-}
-
 /// Helper to extract a string value from a JSON object
 fn extract_string_from_object(value: &JsonValue, key: &str) -> Result<String, String> {
     match value {
-        JsonValue::Object(pairs) => {
-            for (k, v) in pairs {
-                if k == key {
-                    return match v.into() {
-                        JsonValue::StringValue(s) => Ok(s.clone()),
-                        other => Err(format!("Key '{key}' must be a string, got {:?}", other)),
-                    };
-                }
-            }
-            Err(format!("Key '{key}' not found in object"))
-        }
-        other => Err(format!("Expected object, got {:?}", other)),
+        JsonValue::Object(map) => match map.get(key) {
+            Some(JsonValue::String(s)) => Ok(s.clone()),
+            Some(other) => Err(format!("Key '{key}' must be a string, got {other:?}")),
+            None => Err(format!("Key '{key}' not found in object")),
+        },
+        other => Err(format!("Expected object, got {other:?}")),
     }
+}
+
+fn json_from_bytes(bytes: &[u8]) -> Result<JsonValue, String> {
+    if bytes.is_empty() {
+        return Ok(JsonValue::Null);
+    }
+    serde_json::from_slice(bytes).map_err(|e| format!("Failed to parse JSON bytes: {e}"))
+}
+
+fn json_to_bytes(value: &JsonValue) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(value).map_err(|e| format!("Failed to serialize JSON: {e}"))
+}
+
+fn json_null_bytes() -> Vec<u8> {
+    b"null".to_vec()
 }

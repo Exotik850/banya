@@ -9,3 +9,4 @@ path = "lib.rs"
 
 [dependencies]
 banya-plugin = { path = "../../../banya-plugin" }
+serde_json = "1.0"

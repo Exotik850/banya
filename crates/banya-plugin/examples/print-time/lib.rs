@@ -1,7 +1,7 @@
-use banya_plugin::bindings::{
-    banya::controller::json::{Id, Value as JsonValue},
-    exports::{self, banya::plugin::plugin_impl::{CapabilitySchema, Guest, PluginInfo, Value}},
+use banya_plugin::bindings::exports::banya::plugin::plugin_impl::{
+    CapabilitySchema, Guest, PluginInfo,
 };
+use serde_json::Value as JsonValue;
 
 /// PrintTime plugin - prints a time value to the console
 pub struct PrintTimePlugin;
@@ -28,20 +28,25 @@ impl Guest for PrintTimePlugin {
     }
 
     /// Configure the plugin (no configuration needed)
-    fn configure(config: Vec<(String, Id)>) -> Result<(), String> {
-        for (key, id) in &config {
-            let value = id.get();
-            println!("  [PrintTime] Config: {} = {:?}", key, value);
+    fn configure(config: Vec<u8>) -> Result<(), String> {
+        let config_value = json_from_bytes(&config)?;
+        let config_object = match config_value {
+            JsonValue::Null => return Ok(()),
+            JsonValue::Object(map) => map,
+            other => return Err(format!("Config must be an object, got {other:?}")),
+        };
+
+        for (key, value) in config_object {
+            println!("  [PrintTime] Config: {} = {}", key, value);
         }
         Ok(())
     }
 
     /// Invoke a capability dynamically
-    fn invoke(capability: String, args: Vec<Id>) -> Result<Option<Id>, String> {
+    fn invoke(capability: String, args: Vec<u8>) -> Result<Option<Vec<u8>>, String> {
         match capability.as_str() {
             "action" => {
-                // Get the JSON object from the first (and only) argument
-                let json_obj = args.first().ok_or("Missing arguments object")?.get();
+                let json_obj = json_from_bytes(&args)?;
 
                 let time = extract_string_from_object(&json_obj, "time")?;
                 let message = extract_string_from_object(&json_obj, "message")
@@ -50,8 +55,8 @@ impl Guest for PrintTimePlugin {
                 println!("  [PrintTime] {}: {}", message, time);
 
                 let result = format!("Printed: {} - {}", message, time);
-                let id = JsonValue::StringValue(result).into();
-                Ok(Some(id))
+                let result = JsonValue::String(result);
+                Ok(Some(json_to_bytes(&result)?))
             }
 
             _ => Err(format!("Unknown capability: {}", capability)),
@@ -59,21 +64,13 @@ impl Guest for PrintTimePlugin {
     }
 
     /// Return the plugin's current state
-    fn get_state() -> Value {
-        JsonValue::Object(vec![
-            (
-                "name".into(),
-                JsonValue::StringValue("print-time".into()).into(),
-            ),
-            (
-                "version".into(),
-                JsonValue::StringValue("0.1.0".into()).into(),
-            ),
-            (
-                "status".into(),
-                JsonValue::StringValue("running".into()).into(),
-            ),
-        ])
+    fn get_state() -> Vec<u8> {
+        let state = serde_json::json!({
+            "name": "print-time",
+            "version": "0.1.0",
+            "status": "running"
+        });
+        json_to_bytes(&state).unwrap_or_else(|_| json_null_bytes())
     }
 
     /// Clean up resources before unloading
@@ -85,17 +82,26 @@ impl Guest for PrintTimePlugin {
 /// Helper to extract a string value from a JSON object
 fn extract_string_from_object(value: &JsonValue, key: &str) -> Result<String, String> {
     match value {
-        JsonValue::Object(pairs) => {
-            for (k, v) in pairs {
-                if k == key {
-                    return match v.into() {
-                        JsonValue::StringValue(s) => Ok(s.clone()),
-                        other => Err(format!("Key '{key}' must be a string, got {:?}", other)),
-                    };
-                }
-            }
-            Err(format!("Key '{key}' not found in object"))
-        }
-        other => Err(format!("Expected object, got {:?}", other)),
+        JsonValue::Object(map) => match map.get(key) {
+            Some(JsonValue::String(s)) => Ok(s.clone()),
+            Some(other) => Err(format!("Key '{key}' must be a string, got {other:?}")),
+            None => Err(format!("Key '{key}' not found in object")),
+        },
+        other => Err(format!("Expected object, got {other:?}")),
     }
+}
+
+fn json_from_bytes(bytes: &[u8]) -> Result<JsonValue, String> {
+    if bytes.is_empty() {
+        return Ok(JsonValue::Null);
+    }
+    serde_json::from_slice(bytes).map_err(|e| format!("Failed to parse JSON bytes: {e}"))
+}
+
+fn json_to_bytes(value: &JsonValue) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(value).map_err(|e| format!("Failed to serialize JSON: {e}"))
+}
+
+fn json_null_bytes() -> Vec<u8> {
+    b"null".to_vec()
 }

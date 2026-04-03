@@ -1,7 +1,7 @@
 package banya:plugin@0.1.0;
 
 interface plugin-impl {
-    use banya:controller/json@0.1.0.{value, id, object};
+    use banya:controller/controller@0.1.0.{bytes};
 
     /// Schema definition for a plugin capability
     /// Describes what inputs/outputs a capability expects
@@ -37,7 +37,7 @@ interface plugin-impl {
     /// Configure the plugin with host-provided settings
     /// Called after init, before any invoke calls
     /// Returns Ok(()) if configuration was accepted, Err(string) if rejected
-    configure: func(config: object) -> result<_, string>;
+    configure: func(config: bytes) -> result<_, string>;
 
     /// Invoke a capability with arguments
     /// - capability: The capability to invoke (e.g., "sensor", "action")
@@ -46,12 +46,12 @@ interface plugin-impl {
     /// Returns the result value or an error string
     invoke: func(
         capability: string,
-        args: list<id>
-    ) -> result<option<id>, string>;
+        args: bytes
+    ) -> result<option<bytes>, string>;
 
     /// Get the current state of the plugin as a serialized value
     /// Useful for debugging, serialization, or state transfer
-    get-state: func() -> value;
+    get-state: func() -> bytes;
 
     /// Clean up plugin resources before unloading
     /// Called when the plugin is being removed from the host
@@ -63,7 +63,6 @@ interface plugin-impl {
 world plugin {
     /// Import controller interface for plugins to call back into the host
     import banya:controller/controller@0.1.0;
-    import banya:controller/json@0.1.0;
     
     /// Export the unified plugin interface
     export plugin-impl;
