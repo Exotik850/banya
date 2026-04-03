@@ -126,6 +126,7 @@ dependencies = [
 name = "banya-plugin"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "wit-bindgen 0.54.0",
 ]
 
@@ -604,7 +605,6 @@ name = "echo"
 version = "0.1.0"
 dependencies = [
  "banya-plugin",
- "serde_json",
 ]
 
 [[package]]
@@ -811,7 +811,6 @@ version = "0.1.0"
 dependencies = [
  "banya-plugin",
  "chrono",
- "serde_json",
 ]
 
 [[package]]
@@ -1333,7 +1332,6 @@ name = "print-time"
 version = "0.1.0"
 dependencies = [
  "banya-plugin",
- "serde_json",
 ]
 
 [[package]]

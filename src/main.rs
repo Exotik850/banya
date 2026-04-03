@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use banya::builtin::logical::{Compare, LogicalAnd, LogicalNot, LogicalOr, Math, StringOps};
 use banya::{PluginHost, bindings::Plugin, instruction::Instruction};
 use clap::Parser;
 use wasmtime::{Config, Engine, Store, component::Linker};
@@ -12,7 +13,10 @@ fn main() {
 
     // Set up WASI context and plugin host
     let wasi = WasiCtx::builder().inherit_stdio().inherit_args().build();
-    let state = PluginHost::new(wasi);
+    let mut state = PluginHost::new(wasi);
+
+    // Register compile-time native functions
+    register_builtin_functions(&mut state);
 
     // Configure engine with component model support
     let engine = Engine::new(Config::new().wasm_component_model(true)).unwrap();
@@ -67,6 +71,30 @@ fn main() {
         .expect("Failed to run instructions");
 
     println!("Result: {result}");
+}
+
+/// Register all compile-time native functions with the host.
+///
+/// These functions are available alongside WASM plugins and can be invoked
+/// using the same JSON instruction format. They have direct access to system
+/// resources and can perform complex operations without WASM overhead.
+fn register_builtin_functions(host: &mut PluginHost) {
+    // Logical operations
+    banya::register_native_functions!(
+        host,
+        LogicalAnd,
+        LogicalOr,
+        LogicalNot,
+        Compare,
+        StringOps,
+        Math,
+    );
+
+    println!(
+        "Registered {} native function(s): {:?}",
+        host.native_functions.len(),
+        host.native_functions.names().collect::<Vec<_>>()
+    );
 }
 
 /// Recursively collect all .wasm files from a path

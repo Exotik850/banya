@@ -2,32 +2,27 @@
   "name": "time-report",
   "steps": [
     {
-      "plugin": "get-time",
-      "capability": "sensor",
+      "call": "get-time.sensor",
       "format": "%Y-%m-%d %H:%M:%S",
-      "store_as": "current_time"
+      "as": "current_time"
     },
     {
-      "plugin": "get-time",
-      "capability": "sensor",
+      "call": "get-time.sensor",
       "format": "%A, %B %d, %Y",
-      "store_as": "formatted_date"
+      "as": "formatted_date"
     },
     {
-      "plugin": "print-time",
-      "capability": "action",
+      "call": "print-time.action",
       "time": "${current_time}",
       "message": "Current timestamp"
     },
     {
-      "plugin": "print-time",
-      "capability": "action",
+      "call": "print-time.action",
       "time": "${formatted_date}",
       "message": "Today's date"
     },
     {
-      "plugin": "echo",
-      "capability": "action",
+      "call": "echo.action",
       "data": "Time report completed successfully!"
     }
   ]

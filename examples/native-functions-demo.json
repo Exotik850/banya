@@ -1,0 +1,62 @@
+{
+  "name": "native-functions-demo",
+  "steps": [
+    {
+      "call": "compare.evaluate",
+      "operator": "gt",
+      "left": 10,
+      "right": 5,
+      "as": "comparison_result"
+    },
+    {
+      "call": "logical-and.evaluate",
+      "conditions": [true, true, true],
+      "as": "and_result"
+    },
+    {
+      "call": "logical-or.evaluate",
+      "conditions": [false, false, true],
+      "as": "or_result"
+    },
+    {
+      "call": "string-ops.transform",
+      "operation": "concat",
+      "strings": ["Hello", " ", "from", " ", "Banya", "!"],
+      "as": "greeting"
+    },
+    {
+      "call": "string-ops.transform",
+      "operation": "upper",
+      "value": "banya native functions",
+      "as": "upper_text"
+    },
+    {
+      "call": "math.calculate",
+      "operation": "add",
+      "values": [1, 2, 3, 4, 5],
+      "as": "sum"
+    },
+    {
+      "call": "math.calculate",
+      "operation": "mul",
+      "values": [2, 3, 4],
+      "as": "product"
+    },
+    {
+      "call": "compare.evaluate",
+      "operator": "eq",
+      "left": "${sum}",
+      "right": 15,
+      "as": "sum_check"
+    },
+    {
+      "call": "logical-not.evaluate",
+      "value": false,
+      "as": "not_result"
+    },
+    {
+      "call": "echo.action",
+      "data": "Native functions demo completed!\n${greeting}\nUppercase: ${upper_text}\nSum: ${sum} (Check: ${sum_check})\nProduct: ${product}\nComparison Result: ${comparison_result}\nAND Result: ${and_result}\nOR Result: ${or_result}\nNOT Result: ${not_result}"
+    }
+  ]
+}
