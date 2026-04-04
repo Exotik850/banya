@@ -59,7 +59,7 @@ fn main() {
 
     // Parse and execute instructions from JSON file
     let json_file = std::fs::File::open(&args.json_file).expect("Failed to open JSON file");
-    let instruction: Instruction =
+    let instruction: Instruction<_> =
         serde_json::from_reader(json_file).expect("Failed to parse JSON file");
 
     let validated = instruction
@@ -81,19 +81,13 @@ fn main() {
 fn register_builtin_functions(host: &mut PluginHost) {
     // Logical operations
     banya::register_native_functions!(
-        host,
-        LogicalAnd,
-        LogicalOr,
-        LogicalNot,
-        Compare,
-        StringOps,
-        Math,
+        host, LogicalAnd, LogicalOr, LogicalNot, Compare, StringOps, Math,
     );
 
     println!(
         "Registered {} native function(s): {:?}",
-        host.native_functions.len(),
-        host.native_functions.names().collect::<Vec<_>>()
+        host.len_native(),
+        host.native_function_names().collect::<Vec<_>>()
     );
 }
 

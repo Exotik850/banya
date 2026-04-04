@@ -2,7 +2,10 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value as JsonValue};
 use wasmtime::AsContextMut;
 
-use crate::PluginHost;
+use crate::{
+    PluginHost,
+    instruction::types::{Invalid, Valid},
+};
 
 // --- Callable Reference ------------------------------------------------------
 
@@ -13,9 +16,11 @@ use crate::PluginHost;
 /// - `{"plugin": "math", "capability": "calculate"}` (legacy alias)
 /// - `{"call": "math.calculate"}` (ergonomic shorthand)
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
-pub struct CallableRef {
+pub struct CallableRef<S> {
     pub function: String,
     pub capability: String,
+    #[serde(skip)]
+    _marker: std::marker::PhantomData<S>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -28,7 +33,7 @@ struct CallableRefDe {
     capability: Option<String>,
 }
 
-impl<'de> Deserialize<'de> for CallableRef {
+impl<'de> Deserialize<'de> for CallableRef<Invalid> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -38,15 +43,11 @@ impl<'de> Deserialize<'de> for CallableRef {
     }
 }
 
-impl TryFrom<CallableRefDe> for CallableRef {
+impl TryFrom<CallableRefDe> for CallableRef<Invalid> {
     type Error = String;
 
     fn try_from(raw: CallableRefDe) -> Result<Self, Self::Error> {
-        let parsed_call = raw
-            .call
-            .as_deref()
-            .map(parse_call_shorthand)
-            .transpose()?;
+        let parsed_call = raw.call.as_deref().map(parse_call_shorthand).transpose()?;
 
         let function = raw
             .function
@@ -75,6 +76,7 @@ impl TryFrom<CallableRefDe> for CallableRef {
         Ok(Self {
             function,
             capability,
+            _marker: std::marker::PhantomData,
         })
     }
 }
@@ -96,20 +98,46 @@ fn parse_call_shorthand(value: &str) -> Result<(String, String), String> {
 
 // --- Invocation -------------------------------------------------------------
 
-/// A single invocation of a capability exposed by a loaded or native function.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct Invocation {
+#[derive(Debug, Deserialize)]
+struct InvocationDe {
     #[serde(flatten)]
-    pub callable: CallableRef,
+    callable: CallableRefDe,
+    #[serde(flatten)]
+    args: Map<String, JsonValue>,
+}
+
+impl TryFrom<InvocationDe> for Invocation<Invalid> {
+    type Error = String;
+    fn try_from(raw: InvocationDe) -> Result<Self, Self::Error> {
+        let callable = CallableRef::try_from(raw.callable)?;
+        Ok(Self {
+            callable,
+            args: raw.args,
+        })
+    }
+}
+
+/// A single invocation of a capability exposed by a loaded or native function.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+pub struct Invocation<S> {
+    #[serde(flatten)]
+    pub callable: CallableRef<S>,
     /// Arbitrary arguments passed to the capability.
     #[serde(flatten)]
     pub args: Map<String, JsonValue>,
 }
 
-/// Backwards-compatible type name used by external code.
-pub type CapabilityCall = Invocation;
+impl<'de> Deserialize<'de> for Invocation<Invalid> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = InvocationDe::deserialize(deserializer)?;
+        Self::try_from(raw).map_err(serde::de::Error::custom)
+    }
+}
 
-impl Invocation {
+impl<S> Invocation<S> {
     #[must_use]
     pub fn function(&self) -> &str {
         &self.callable.function
@@ -119,8 +147,33 @@ impl Invocation {
     pub fn capability(&self) -> &str {
         &self.callable.capability
     }
+}
 
-    fn invoke_json<S: AsContextMut<Data = PluginHost>>(&self, mut store: S) -> Result<JsonValue, String> {
+impl Invocation<Invalid> {
+    pub fn validate(self, host: &PluginHost) -> Result<Invocation<Valid>, String> {
+        if host.resolve_callable(self.function()).is_none() {
+            return Err(format!(
+                "No loaded or native function found for invocation target: {}",
+                self.function()
+            ));
+        }
+
+        Ok(Invocation {
+            callable: CallableRef {
+                function: self.callable.function,
+                capability: self.callable.capability,
+                _marker: std::marker::PhantomData,
+            },
+            args: self.args,
+        })
+    }
+}
+
+impl Invocation<Valid> {
+    fn invoke_json<S: AsContextMut<Data = PluginHost>>(
+        &self,
+        mut store: S,
+    ) -> Result<JsonValue, String> {
         let args_json = {
             let host = store.as_context().data();
             interpolate_json(JsonValue::Object(self.args.clone()), host)?
@@ -130,12 +183,7 @@ impl Invocation {
             let host = store.as_context().data();
             host.resolve_callable(self.function())
         }
-        .ok_or_else(|| {
-            format!(
-                "No loaded or native function found for invocation target: {}",
-                self.function()
-            )
-        })?;
+        .expect("Validated Invocation should have callable target");
 
         callable.invoke_json(store.as_context_mut(), self.capability(), &args_json)
     }
@@ -150,16 +198,62 @@ impl Invocation {
 // --- Condition --------------------------------------------------------------
 
 /// A condition that gates whether a step executes.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct Condition {
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+pub struct Condition<S> {
     #[serde(flatten)]
-    pub call: Invocation,
+    pub call: Invocation<S>,
     /// If true, the condition result is negated.
     #[serde(default)]
     pub negate: bool,
 }
 
-impl Condition {
+#[derive(Debug, Deserialize)]
+struct ConditionDe {
+    #[serde(flatten)]
+    call: InvocationDe,
+    #[serde(default)]
+    negate: bool,
+}
+impl TryFrom<ConditionDe> for Condition<Invalid> {
+    type Error = String;
+    fn try_from(raw: ConditionDe) -> Result<Self, Self::Error> {
+        let call = Invocation::try_from(raw.call)?;
+        Ok(Self {
+            call,
+            negate: raw.negate,
+        })
+    }
+}
+impl<'de> Deserialize<'de> for Condition<Invalid> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = ConditionDe::deserialize(deserializer)?;
+        Self::try_from(raw).map_err(serde::de::Error::custom)
+    }
+}
+
+impl<S> Condition<S> {
+    pub fn function(&self) -> &str {
+        self.call.function()
+    }
+
+    pub fn capability(&self) -> &str {
+        self.call.capability()
+    }
+}
+
+impl Condition<Invalid> {
+    pub fn validate(self, host: &PluginHost) -> Result<Condition<Valid>, String> {
+        Ok(Condition {
+            call: self.call.validate(host)?,
+            negate: self.negate,
+        })
+    }
+}
+
+impl Condition<Valid> {
     /// Evaluate the condition invocation and convert the result to a boolean.
     pub fn evaluate<S: AsContextMut<Data = PluginHost>>(&self, store: S) -> Result<bool, String> {
         let result_value = self.call.invoke_json(store)?;
@@ -170,42 +264,153 @@ impl Condition {
             _ => true,
         };
 
-        Ok(if self.negate { !bool_result } else { bool_result })
+        Ok(if self.negate {
+            !bool_result
+        } else {
+            bool_result
+        })
     }
 }
 
 // --- Step -------------------------------------------------------------------
 
 /// A single step in an instruction pipeline.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct Step {
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+pub struct Step<S> {
     /// Optional condition. If present and false, this step is skipped.
     #[serde(rename = "if", alias = "when", skip_serializing_if = "Option::is_none")]
-    pub condition: Option<Condition>,
+    pub condition: Option<Condition<S>>,
+
+    /// The next steps to execute, if this step is successful.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next: Option<Vec<Step<S>>>,
+
     /// The invocation to execute.
     #[serde(flatten)]
-    pub call: Invocation,
+    pub call: Invocation<S>,
     /// Optional variable name to store the result for later interpolation.
+    ///
+    /// This stores the raw JSON bytes of the result, which can be accessed by other steps or plugins via interpolation (e.g. `${variable_name}`).
+    /// or the `get` function of the controller host interface.
     #[serde(alias = "as", skip_serializing_if = "Option::is_none")]
     pub store_as: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StepDe {
+    #[serde(flatten)]
+    call: InvocationDe,
+    #[serde(rename = "if", alias = "when", skip_serializing_if = "Option::is_none")]
+    condition: Option<ConditionDe>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    next: Option<Vec<StepDe>>,
+    #[serde(alias = "as", skip_serializing_if = "Option::is_none")]
+    store_as: Option<String>,
+}
+
+impl TryFrom<StepDe> for Step<Invalid> {
+    type Error = String;
+    fn try_from(raw: StepDe) -> Result<Self, Self::Error> {
+        let call = Invocation::try_from(raw.call)?;
+        let condition: Option<Condition<Invalid>> =
+            raw.condition.map(Condition::try_from).transpose()?;
+        let next = raw
+            .next
+            .map(|steps| {
+                steps
+                    .into_iter()
+                    .map(Step::try_from)
+                    .collect::<Result<Vec<_>, String>>()
+            })
+            .transpose()?;
+
+        Ok(Self {
+            call,
+            condition,
+            next,
+            store_as: raw.store_as,
+        })
+    }
+}
+
+impl Step<Invalid> {
+    pub fn validate(self, host: &PluginHost) -> Result<Step<Valid>, String> {
+        let condition = if let Some(condition) = self.condition {
+            Some(condition.validate(host)?)
+        } else {
+            None
+        };
+
+        let call = self.call.validate(host)?;
+
+        let next = self
+            .next
+            .map(|steps| {
+                steps
+                    .into_iter()
+                    .map(|step| step.validate(host))
+                    .collect::<Result<Vec<_>, String>>()
+            })
+            .transpose()?;
+
+        Ok(Step {
+            condition,
+            call,
+            store_as: self.store_as,
+            next,
+        })
+    }
 }
 
 // --- Instruction ------------------------------------------------------------
 
 /// A complete instruction: an ordered list of steps to execute.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct Instruction {
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+pub struct Instruction<S> {
     /// Optional name for identification and logging.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// Ordered list of steps.
-    pub steps: Vec<Step>,
+    #[serde(default)]
+    pub steps: Vec<Step<S>>,
 }
 
-impl Instruction {
+#[derive(Debug, Deserialize)]
+struct InstructionDe {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(default)]
+    steps: Vec<StepDe>,
+}
+impl TryFrom<InstructionDe> for Instruction<Invalid> {
+    type Error = String;
+    fn try_from(raw: InstructionDe) -> Result<Self, Self::Error> {
+        let steps = raw
+            .steps
+            .into_iter()
+            .map(Step::try_from)
+            .collect::<Result<Vec<_>, String>>()?;
+
+        Ok(Self {
+            name: raw.name,
+            steps,
+        })
+    }
+}
+impl<'de> Deserialize<'de> for Instruction<Invalid> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = InstructionDe::deserialize(deserializer)?;
+        Self::try_from(raw).map_err(serde::de::Error::custom)
+    }
+}
+
+impl<S> Instruction<S> {
     /// Create a new instruction with the given name and steps.
     #[must_use]
-    pub fn new(name: impl Into<Option<String>>, steps: Vec<Step>) -> Self {
+    pub fn new(name: impl Into<Option<String>>, steps: Vec<Step<S>>) -> Self {
         Self {
             name: name.into(),
             steps,
@@ -214,86 +419,41 @@ impl Instruction {
 
     /// Create an instruction with a single step.
     #[must_use]
-    pub fn single(call: CapabilityCall) -> Self {
+    pub fn single(call: Invocation<S>) -> Self {
         Self {
             name: None,
             steps: vec![Step {
                 condition: None,
                 call,
                 store_as: None,
+                next: None,
             }],
         }
     }
+}
 
+impl Instruction<Invalid> {
     /// Validate that all invocation targets exist in the host.
-    pub fn validate(&self, host: &PluginHost) -> Result<ValidatedInstruction, String> {
-        let mut validated_steps = Vec::with_capacity(self.steps.len());
+    pub fn validate(self, host: &PluginHost) -> Result<Instruction<Valid>, String> {
+        let validated_steps = self
+            .steps
+            .into_iter()
+            .map(|step| step.validate(host))
+            .collect::<Result<Vec<_>, String>>()?;
 
-        for (i, step) in self.steps.iter().enumerate() {
-            if let Some(condition) = &step.condition
-                && host.resolve_callable(condition.call.function()).is_none()
-            {
-                return Err(format!(
-                    "Step {}: No loaded or native function found for condition target: {}",
-                    i,
-                    condition.call.function()
-                ));
-            }
-
-            if host.resolve_callable(step.call.function()).is_none() {
-                return Err(format!(
-                    "Step {}: No loaded or native function found for call target: {}",
-                    i,
-                    step.call.function()
-                ));
-            }
-
-            validated_steps.push(ValidatedStep {
-                condition: step.condition.clone(),
-                call: step.call.clone(),
-                store_as: step.store_as.clone(),
-            });
-        }
-
-        Ok(ValidatedInstruction {
-            name: self.name.clone(),
+        Ok(Instruction {
+            name: self.name,
             steps: validated_steps,
         })
     }
 }
 
-// --- Validated Types --------------------------------------------------------
-
-/// A step that has been validated and is ready for execution.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
-pub struct ValidatedStep {
-    pub condition: Option<Condition>,
-    pub call: CapabilityCall,
-    pub store_as: Option<String>,
-}
-
-/// An instruction that has been validated and is ready for execution.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
-pub struct ValidatedInstruction {
-    pub name: Option<String>,
-    pub steps: Vec<ValidatedStep>,
-}
-
-impl ValidatedInstruction {
-    /// Check if this instruction has any steps.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.steps.is_empty()
-    }
-
-    /// Get the number of steps in this instruction.
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.steps.len()
-    }
-
+impl Instruction<Valid> {
     /// Execute all steps in sequence and return the final JSON result as UTF-8.
-    pub fn execute<S: AsContextMut<Data = PluginHost>>(&self, mut store: S) -> Result<String, String> {
+    pub fn execute<S: AsContextMut<Data = PluginHost>>(
+        &self,
+        mut store: S,
+    ) -> Result<String, String> {
         let mut last_result = json_null_bytes();
 
         for step in &self.steps {
@@ -326,6 +486,38 @@ impl ValidatedInstruction {
         String::from_utf8(last_result).map_err(|e| format!("Result is not valid UTF-8 JSON: {e}"))
     }
 }
+
+// // --- Validated Types --------------------------------------------------------
+
+// /// A step that has been validated and is ready for execution.
+// #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+// pub struct ValidatedStep {
+//     pub condition: Option<Condition<Valid>>,
+//     pub call: Invocation<Valid>,
+//     pub store_as: Option<String>,
+//     pub next: Option<Vec<ValidatedStep>>,
+// }
+
+// /// An instruction that has been validated and is ready for execution.
+// #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+// pub struct ValidatedInstruction {
+//     pub name: Option<String>,
+//     pub steps: Vec<ValidatedStep>,
+// }
+
+// impl ValidatedInstruction {
+//     /// Check if this instruction has any steps.
+//     #[must_use]
+//     pub fn is_empty(&self) -> bool {
+//         self.steps.is_empty()
+//     }
+
+//     /// Get the number of steps in this instruction.
+//     #[must_use]
+//     pub fn len(&self) -> usize {
+//         self.steps.len()
+//     }
+// }
 
 fn json_to_bytes(value: &JsonValue) -> Result<Vec<u8>, String> {
     serde_json::to_vec(value).map_err(|e| format!("Failed to serialize JSON: {e}"))

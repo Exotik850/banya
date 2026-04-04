@@ -59,6 +59,12 @@ impl PluginHost {
         self.plugins.len()
     }
 
+    /// Get the number of registered native functions
+    #[must_use]
+    pub fn len_native(&self) -> usize {
+        self.native_functions.len()
+    }
+
     /// Check if any plugins are loaded
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -157,6 +163,18 @@ impl PluginHost {
             None
         }
     }
+
+    pub fn plugin_names(&self) -> impl Iterator<Item = &str> {
+        self.plugins.keys().map(|k| k.as_str())
+    }
+
+    pub fn native_function_names(&self) -> impl Iterator<Item = &str> {
+        self.native_functions.names()
+    }
+
+    pub fn all_names(&self) -> impl Iterator<Item = &str> {
+        self.plugin_names().chain(self.native_function_names())
+    }
 }
 
 /// Represents what a callable name resolves to
@@ -178,7 +196,11 @@ impl CallableTarget {
     #[must_use]
     pub fn capability_names(&self) -> Vec<String> {
         match self {
-            Self::Plugin(plugin) => plugin.capabilities().iter().map(|c| c.name.clone()).collect(),
+            Self::Plugin(plugin) => plugin
+                .capabilities()
+                .iter()
+                .map(|c| c.name.clone())
+                .collect(),
             Self::Native(function) => function
                 .info()
                 .capabilities
@@ -196,8 +218,8 @@ impl CallableTarget {
     ) -> Result<JsonValue, String> {
         match self {
             Self::Plugin(plugin) => {
-                let args_bytes =
-                    serde_json::to_vec(args).map_err(|e| format!("Failed to serialize JSON: {e}"))?;
+                let args_bytes = serde_json::to_vec(args)
+                    .map_err(|e| format!("Failed to serialize JSON: {e}"))?;
                 let result = plugin.invoke(&mut store, capability, &args_bytes)?;
 
                 match result {
