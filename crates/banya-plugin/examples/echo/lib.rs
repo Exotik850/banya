@@ -10,16 +10,14 @@ impl EchoPlugin {
         let data = args.require_str("data")?;
         println!("  [Echo Sensor] Received data: {}", data);
         let matches = data == "value";
-        let result = JsonValue::Bool(matches);
-        Ok(Some(result))
+        Ok(Some(matches.into()))
     }
 
     fn action(args: JsonValue) -> PluginResult {
         let data = args.require_str("data")?;
         println!("  [Echo Action] Executing with data: {}", data);
         let result = format!("Echo: {data}");
-        let result = JsonValue::String(result);
-        Ok(Some(result))
+        Ok(Some(result.into()))
     }
 }
 
@@ -53,19 +51,19 @@ impl RoutedJsonPlugin for EchoPlugin {
     /// Configure the plugin (echo plugin doesn't need configuration)
     fn configure(config: JsonValue) -> Result<(), String> {
         let config_object = match config {
-            JsonValue::Null => return Ok(()),
+            JsonValue::Static(StaticNode::Null) => return Ok(()),
             JsonValue::Object(map) => map,
             other => return Err(format!("Config must be an object, got {other:?}")),
         };
 
-        for (key, value) in config_object {
+        for (key, value) in config_object.iter() {
             println!("  Config: {} = {}", key, value);
         }
         Ok(())
     }
 
     /// Return the plugin's current state (echo plugin has no state)
-    fn state() -> JsonValue {
+    fn state() -> OwnedValue {
         json!({
             "name": "echo",
             "version": "0.1.0",

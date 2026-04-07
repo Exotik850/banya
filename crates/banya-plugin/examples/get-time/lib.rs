@@ -14,9 +14,7 @@ impl GetTimePlugin {
         let time_str = now.format(&format).to_string();
 
         println!("  [GetTime] Current time: {}", time_str);
-
-        let result = JsonValue::String(time_str);
-        Ok(Some(result))
+        Ok(Some(time_str.into()))
     }
 }
 
@@ -30,30 +28,30 @@ impl RoutedJsonPlugin for GetTimePlugin {
 
     fn capability_routes() -> Vec<CapabilityRoute> {
         vec![capability_route(
-                capability("sensor")
-                    .description("Returns the current time in the specified format")
-                    .input("format", "string")
-                    .output("string"),
-                Self::sensor,
-            )]
+            capability("sensor")
+                .description("Returns the current time in the specified format")
+                .input("format", "string")
+                .output("string"),
+            Self::sensor,
+        )]
     }
 
     /// Configure the plugin (no configuration needed)
     fn configure(config: JsonValue) -> Result<(), String> {
         let config_object = match config {
-            JsonValue::Null => return Ok(()),
+            JsonValue::Static(StaticNode::Null) => return Ok(()),
             JsonValue::Object(map) => map,
             other => return Err(format!("Config must be an object, got {other:?}")),
         };
 
-        for (key, value) in config_object {
+        for (key, value) in config_object.iter() {
             println!("  [GetTime] Config: {} = {}", key, value);
         }
         Ok(())
     }
 
     /// Return the plugin's current state
-    fn state() -> JsonValue {
+    fn state() -> OwnedValue {
         let now = Local::now();
         json!({
             "name": "get-time",

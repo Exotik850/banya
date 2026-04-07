@@ -12,8 +12,7 @@ impl PrintTimePlugin {
         println!("  [PrintTime] {}: {}", message, time);
 
         let result = format!("Printed: {} - {}", message, time);
-        let result = JsonValue::String(result);
-        Ok(Some(result))
+        Ok(Some(result.into()))
     }
 }
 
@@ -27,30 +26,29 @@ impl RoutedJsonPlugin for PrintTimePlugin {
 
     fn capability_routes() -> Vec<CapabilityRoute> {
         vec![capability_route(
-                capability("action")
-                    .description("Prints a time value with an optional prefix message")
-                    .inputs([("time", "string"), ("message", "string")])
-                    .output("string"),
-                Self::action,
-            )]
+            capability("action")
+                .description("Prints a time value with an optional prefix message")
+                .inputs([("time", "string"), ("message", "string")])
+                .output("string"),
+            Self::action,
+        )]
     }
 
     /// Configure the plugin (no configuration needed)
     fn configure(config: JsonValue) -> Result<(), String> {
         let config_object = match config {
-            JsonValue::Null => return Ok(()),
+            JsonValue::Static(StaticNode::Null) => return Ok(()), // Treat null config as empty
             JsonValue::Object(map) => map,
             other => return Err(format!("Config must be an object, got {other:?}")),
         };
-
-        for (key, value) in config_object {
+        for (key, value) in config_object.iter() {
             println!("  [PrintTime] Config: {} = {}", key, value);
         }
         Ok(())
     }
 
     /// Return the plugin's current state
-    fn state() -> JsonValue {
+    fn state() -> OwnedValue {
         json!({
             "name": "print-time",
             "version": "0.1.0",

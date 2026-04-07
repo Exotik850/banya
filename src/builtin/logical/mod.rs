@@ -402,7 +402,10 @@ impl Math {
             .and_then(|v| v.as_array())
             .ok_or("Missing or invalid 'values' argument (expected array)")?;
 
-        let nums: Vec<f64> = values.iter().filter_map(serde_json::Value::as_f64).collect();
+        let nums: Vec<f64> = values
+            .iter()
+            .filter_map(serde_json::Value::as_f64)
+            .collect();
 
         if nums.is_empty() {
             return Err("No valid numeric values provided".to_string());
@@ -477,11 +480,11 @@ impl RoutedNativeFunction for Math {
 
     fn capability_routes(&self) -> Vec<NativeCapabilityRoute<Self>> {
         vec![native_capability_route(
-                native_capability("calculate")
-                    .description("Perform mathematical calculations")
-                    .inputs([("operation", "string"), ("values", "array<number>")])
-                    .output("number"),
-                Self::calculate,
-            )]
+            native_capability("calculate")
+                .description("Perform mathematical calculations")
+                .inputs([("operation", "string"), ("values", "array<number>")])
+                .output("number"),
+            Self::calculate,
+        )]
     }
 }
